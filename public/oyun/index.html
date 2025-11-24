@@ -1,0 +1,1755 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Mini Pixel art Oyun</title>
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    canvas {
+      image-rendering: pixelated;
+      border: 1px solid #555;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+  const TILE_SIZE   = 32;
+  const SCALE       = 2;
+  const SCREEN_COLS = 20;
+  const SCREEN_ROWS = 12;
+
+  const WORLD_COLS  = 120;
+  const WORLD_ROWS  = SCREEN_ROWS;
+  const WORLD_WIDTH_PX = WORLD_COLS * TILE_SIZE;
+
+  // --- PLAYER ANIM SABİTLERİ ---
+
+  const IDLE_FRAMES  = 4;  // eastidle1-4, westidle1-4
+  const RUN_FRAMES   = 8;  // eastrun1-8,  westrun1-8
+  const JUMP_FRAMES  = 3;  // eastjump1-3, westjump1-3
+  const JAB_FRAMES   = 3;  // eastjab1-3,  westjab1-3
+  const FKICK_FRAMES = 6;  // efkick1-6,   wfkick1-6
+  const HIT_FRAMES   = 6;  // etp1-6,      wtp1-6
+  const DEATH_FRAMES = 7;  // efb1-7,      wfb1-7
+
+  const JAB_HIT_START   = 1;
+  const JAB_HIT_END     = 2;
+  const FKICK_HIT_START = 2;
+  const FKICK_HIT_END   = 4;
+
+  const MAX_HITS_BEFORE_DEATH = 10;
+
+  const FOOT_OFFSET       = 8;
+  const FKICK_SPEED       = 260;
+  const FKICK_MIN_FALL_VY = 300;
+  const STUN_DURATION     = 1000; // 1 saniye stun (player)
+
+  // --- ENEMY SABİTLERİ ---
+
+  const ENEMY_COUNT        = 10;
+  const BOSS_AREA_COLS     = 20;
+  const BOSS_AREA_WIDTH    = BOSS_AREA_COLS * TILE_SIZE;
+
+  const ENEMY_RANGE_FACTOR = 0.2; // player takip range
+  const ENEMY_RANGE        = SCREEN_COLS * TILE_SIZE * ENEMY_RANGE_FACTOR;
+
+  const ENEMY_IDLE_FRAMES  = 8;   // nie1-8, niw1-8
+  const ENEMY_RUN_FRAMES   = 8;   // nre1-8, nrw1-8
+  const ENEMY_JUMP_FRAMES  = 10;  // nje1-10, njw1-10
+  const ENEMY_ATTACK_FRAMES        = 7;  // nke1-7, nkw1-7
+  const ENEMY_ATTACK_COOLDOWN      = 3000;
+  const ENEMY_ATTACK_ANIM_INTERVAL = 1000 / 12;
+  const ENEMY_ATTACK_RANGE         = TILE_SIZE * 1.2;
+  const ENEMY_ATTACK_HIT_START     = 2;
+  const ENEMY_ATTACK_HIT_END       = 4;
+
+  const ENEMY_MAX_HITS          = 3;      // 3 kere vur → öl
+  const ENEMY_HIT_FRAMES        = 7;      // ntpe1-7, ntpw1-7
+  const ENEMY_HIT_STUN          = 1000;   // 1 saniye stun
+  const ENEMY_HIT_ANIM_INTERVAL = ENEMY_HIT_STUN / ENEMY_HIT_FRAMES;
+
+  // YENİ: enemy ölüm animasyonu (falling-back-death)
+  const ENEMY_DEATH_FRAMES        = 7;        // nfbe1-7, nfbw1-7
+  const ENEMY_DEATH_ANIM_INTERVAL = 1000 / 10;
+
+  const ENEMY_SPEED         = 70;
+  const ENEMY_ANIM_INTERVAL = 1000 / 10;
+  const ENEMY_GRAVITY       = 2000;
+  const ENEMY_JUMP_STRENGTH = -750;
+
+  let ENEMY_WIDTH  = 0;
+  let ENEMY_HEIGHT = 0;
+
+  // --- BOSS SABİTLERİ ---
+  const BOSS_MAX_HITS              = 20;                 // 20 hit → ölüm
+  const BOSS_SPEED                 = 60;
+  const BOSS_RANGE                 = ENEMY_RANGE * 2;    // görüş alanı 2 kat
+  const BOSS_ATTACK_RANGE          = ENEMY_ATTACK_RANGE * 2; // attack range 2 kat
+  const BOSS_ATTACK_COOLDOWN       = 2000;               // 2 sn aralıklarla
+  const BOSS_FIREBALL_FRAMES       = 6;                  // 1f-6f / me_1-6
+  const BOSS_KICK_FRAMES           = 7;                  // rk1-7 / rke1-7
+  const BOSS_DEATH_FRAMES          = 7;                  // aa1-7
+  const BOSS_ANIM_INTERVAL         = 1000 / 10;
+  const BOSS_ATTACK_ANIM_INTERVAL  = 1000 / 12;
+  const BOSS_DEATH_ANIM_INTERVAL   = 1000 / 10;
+  const BOSS_FIREBALL_HIT_START    = 2;
+  const BOSS_FIREBALL_HIT_END      = 4;
+  const BOSS_KICK_HIT_START        = 2;
+  const BOSS_KICK_HIT_END          = 4;
+
+  let BOSS_WIDTH  = TILE_SIZE * 2;
+  let BOSS_HEIGHT = TILE_SIZE * 2;
+
+  // --- CANVAS ---
+
+  const canvas = document.getElementById("gameCanvas");
+  const ctx    = canvas.getContext("2d");
+
+  canvas.width  = SCREEN_COLS * TILE_SIZE;
+  canvas.height = SCREEN_ROWS * TILE_SIZE;
+
+  canvas.style.width  = (canvas.width  * SCALE) + "px";
+  canvas.style.height = (canvas.height * SCALE) + "px";
+
+  ctx.imageSmoothingEnabled = false;
+
+  // --- GÖRSELLER ---
+
+  const bgImg = new Image();
+  bgImg.src   = "./sky.png";
+
+  // PLAYER FRAMES
+  const idleEastFrames  = [];
+  const idleWestFrames  = [];
+  const runEastFrames   = [];
+  const runWestFrames   = [];
+  const jumpEastFrames  = [];
+  const jumpWestFrames  = [];
+  const jabEastFrames   = [];
+  const jabWestFrames   = [];
+  const fkickEastFrames = [];
+  const fkickWestFrames = [];
+  const hitEastFrames   = [];
+  const hitWestFrames   = [];
+  const deathEastFrames = [];
+  const deathWestFrames = [];
+  const deathFinalImg   = new Image();
+  deathFinalImg.src     = "./death1.png";
+
+  // ENEMY FRAMES
+  const enemyIdleEastFrames   = [];
+  const enemyIdleWestFrames   = [];
+  const enemyRunEastFrames    = [];
+  const enemyRunWestFrames    = [];
+  const enemyJumpEastFrames   = [];
+  const enemyJumpWestFrames   = [];
+  const enemyAttackEastFrames = [];
+  const enemyAttackWestFrames = [];
+  const enemyHitEastFrames    = [];
+  const enemyHitWestFrames    = [];
+  const enemyDeathEastFrames  = [];
+  const enemyDeathWestFrames  = [];
+
+  // BOSS FRAMES
+  const bossIdleEastImg = new Image();
+  bossIdleEastImg.src   = "./ge.png";
+  const bossIdleWestImg = new Image();
+  bossIdleWestImg.src   = "./gw.png";
+    // Boss sprite boyuna göre genişlik/yükseklik al ve zemine oturt
+  bossIdleEastImg.onload = () => {
+    BOSS_WIDTH  = bossIdleEastImg.width;
+    BOSS_HEIGHT = bossIdleEastImg.height;
+
+    // Eğer boss zaten spawn olduysa, ayağını tekrar zemine koy
+    if (boss) {
+      const groundY = getGroundYAtX(boss.x);
+      boss.y = groundY - BOSS_HEIGHT + FOOT_OFFSET;
+    }
+  };
+
+
+  const bossWalkEastFrames     = [];
+  const bossWalkWestFrames     = [];
+  const bossFireballEastFrames = [];
+  const bossFireballWestFrames = [];
+  const bossKickEastFrames     = [];
+  const bossKickWestFrames     = [];
+  const bossDeathFrames        = [];
+
+  // --- PLAYER SPRITE LOAD ---
+
+  for (let i = 1; i <= IDLE_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./eastidle${i}.png`;
+    idleEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./westidle${i}.png`;
+    idleWestFrames.push(w);
+  }
+
+  for (let i = 1; i <= RUN_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./eastrun${i}.png`;
+    runEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./westrun${i}.png`;
+    runWestFrames.push(w);
+  }
+
+  for (let i = 1; i <= JUMP_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./eastjump${i}.png`;
+    jumpEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./westjump${i}.png`;
+    jumpWestFrames.push(w);
+  }
+
+  for (let i = 1; i <= JAB_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./eastjab${i}.png`;
+    jabEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./westjab${i}.png`;
+    jabWestFrames.push(w);
+  }
+
+  for (let i = 1; i <= FKICK_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./efkick${i}.png`;
+    fkickEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./wfkick${i}.png`;
+    fkickWestFrames.push(w);
+  }
+
+  for (let i = 1; i <= HIT_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./etp${i}.png`;
+    hitEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./wtp${i}.png`;
+    hitWestFrames.push(w);
+  }
+
+  for (let i = 1; i <= DEATH_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./efb${i}.png`;
+    deathEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./wfb${i}.png`;
+    deathWestFrames.push(w);
+  }
+
+  // --- ENEMY SPRITE LOAD ---
+
+  // idle: nie1-8, niw1-8
+  for (let i = 1; i <= ENEMY_IDLE_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./nie${i}.png`;
+    enemyIdleEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./niw${i}.png`;
+    enemyIdleWestFrames.push(w);
+  }
+
+  // run: nre1-8, nrw1-8
+  for (let i = 1; i <= ENEMY_RUN_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./nre${i}.png`;
+    enemyRunEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./nrw${i}.png`;
+    enemyRunWestFrames.push(w);
+  }
+
+  // jump (backflip): nje1-10, njw1-10
+  for (let i = 1; i <= ENEMY_JUMP_FRAMES; i++) {
+    const e = new Image();
+    e.onerror = () => {
+      e.onerror = null;
+      e.src = `./nje${i}.png`;
+    };
+    e.src = `./nje${i}.png`;
+    enemyJumpEastFrames.push(e);
+
+    const w = new Image();
+    w.onerror = () => {
+      w.onerror = null;
+      w.src = `./njw${i}.png`;
+    };
+    w.src = `./njw${i}.png`;
+    enemyJumpWestFrames.push(w);
+  }
+
+  // attack: nke1-7, nkw1-7
+  for (let i = 1; i <= ENEMY_ATTACK_FRAMES; i++) {
+    const e = new Image();
+    e.onerror = () => {
+      e.onerror = null;
+      e.src = `./nke${i}.png`;
+    };
+    e.src = `./nke${i}.png`;
+    enemyAttackEastFrames.push(e);
+
+    const w = new Image();
+    w.onerror = () => {
+      w.onerror = null;
+      w.src = `./nkw${i}.png`;
+    };
+    w.src = `./nkw${i}.png`;
+    enemyAttackWestFrames.push(w);
+  }
+
+  // get-hit (taking-punch): ntpe1-7, ntpw1-7
+  for (let i = 1; i <= ENEMY_HIT_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./ntpe${i}.png`;
+    e.onerror = () => console.error("Enemy hit EAST image not found:", e.src);
+    enemyHitEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./ntpw${i}.png`;
+    w.onerror = () => console.error("Enemy hit WEST image not found:", w.src);
+    enemyHitWestFrames.push(w);
+  }
+
+  // death (falling-back-death): nfbe1-7, nfbw1-7
+  for (let i = 1; i <= ENEMY_DEATH_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./nfbe${i}.png`;  // east
+    enemyDeathEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./nfbw${i}.png`;  // west
+    enemyDeathWestFrames.push(w);
+  }
+
+  // BOSS walk: gwe1-8 (east), gww1-8 (west)
+  for (let i = 1; i <= 8; i++) {
+    const e = new Image();
+    e.src = `./gwe${i}.png`;
+    bossWalkEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./gww${i}.png`;
+    bossWalkWestFrames.push(w);
+  }
+
+  // BOSS fireball attack: me_1-6 (east), 1f-6f (west)
+  for (let i = 1; i <= BOSS_FIREBALL_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./me_${i}.png`;
+    bossFireballEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./${i}f.png`;
+    bossFireballWestFrames.push(w);
+  }
+
+  // BOSS kick attack: rke1-7 (east), rk1-7 (west)
+  for (let i = 1; i <= BOSS_KICK_FRAMES; i++) {
+    const e = new Image();
+    e.src = `./rke${i}.png`;
+    bossKickEastFrames.push(e);
+
+    const w = new Image();
+    w.src = `./rk${i}.png`;
+    bossKickWestFrames.push(w);
+  }
+
+  // BOSS death (fallback): aa1-7
+  for (let i = 1; i <= BOSS_DEATH_FRAMES; i++) {
+    const aa = new Image();
+    aa.src = `./aa${i}.png`;
+    bossDeathFrames.push(aa);
+  }
+
+  // --- HARİTA ---
+
+  const level = [];
+
+  function generateLevel() {
+    level.length = 0;
+    const GROUND_ROW = WORLD_ROWS - 1;
+
+    for (let row = 0; row < WORLD_ROWS; row++) {
+      const r = [];
+      for (let col = 0; col < WORLD_COLS; col++) {
+        r.push(-1);
+      }
+      level.push(r);
+    }
+
+    function addPlatform(row, startCol, endCol) {
+      for (let c = startCol; c <= endCol; c++) {
+        if (c >= 0 && c < WORLD_COLS && row >= 0 && row < WORLD_ROWS) {
+          level[row][c] = 0;
+        }
+      }
+    }
+
+    function carveHole(startCol, endCol) {
+      for (let c = startCol; c <= endCol; c++) {
+        if (c >= 0 && c < WORLD_COLS) {
+          level[GROUND_ROW][c] = -1;
+        }
+      }
+    }
+
+    addPlatform(GROUND_ROW, 0, WORLD_COLS - 1);
+
+    carveHole(14, 18);
+    carveHole(34, 38);
+    carveHole(60, 64);
+    carveHole(82, 88);
+
+    addPlatform(GROUND_ROW - 1, 8, 10);
+    addPlatform(GROUND_ROW - 2, 10, 12);
+    addPlatform(GROUND_ROW - 2, 14, 18);
+
+    addPlatform(GROUND_ROW - 2, 26, 30);
+    addPlatform(GROUND_ROW - 3, 30, 34);
+    addPlatform(GROUND_ROW - 3, 34, 38);
+
+    addPlatform(GROUND_ROW - 2, 48, 52);
+    addPlatform(GROUND_ROW - 3, 52, 56);
+    addPlatform(GROUND_ROW - 4, 56, 60);
+    addPlatform(GROUND_ROW - 3, 60, 64);
+
+    addPlatform(GROUND_ROW - 3, 74, 78);
+    addPlatform(GROUND_ROW - 4, 78, 82);
+    addPlatform(GROUND_ROW - 3, 88, 92);
+    addPlatform(GROUND_ROW - 2, 96, 102);
+  }
+
+  function isSolidAt(x, y) {
+    const col = Math.floor(x / TILE_SIZE);
+    const row = Math.floor(y / TILE_SIZE);
+
+    if (col < 0 || col >= WORLD_COLS || row < 0 || row >= WORLD_ROWS) {
+      return false;
+    }
+    return level[row][col] === 0;
+  }
+
+  function getGroundYAtX(x) {
+    const col = Math.floor(x / TILE_SIZE);
+    if (col < 0 || col >= WORLD_COLS) {
+      return (WORLD_ROWS - 1) * TILE_SIZE;
+    }
+
+    for (let row = 0; row < WORLD_ROWS; row++) {
+      if (level[row][col] === 0) {
+        return row * TILE_SIZE;
+      }
+    }
+    return (WORLD_ROWS - 1) * TILE_SIZE;
+  }
+
+  // --- ENEMIES ---
+
+  const enemies = [];
+
+  function spawnEnemies() {
+    enemies.length = 0;
+
+    const maxCol = WORLD_COLS - BOSS_AREA_COLS - 1; // boss alanına spawn olmasınlar
+
+    for (let i = 0; i < ENEMY_COUNT; i++) {
+      const col = Math.floor(Math.random() * maxCol);
+      const baseX = col * TILE_SIZE + TILE_SIZE * 0.25;
+
+      const groundY = getGroundYAtX(baseX);
+      const enemyH = ENEMY_HEIGHT || TILE_SIZE;
+
+      const y = groundY - enemyH + FOOT_OFFSET;
+
+      enemies.push({
+        x: baseX,
+        y: y,
+        vx: 0,
+        vy: 0,
+        dir: Math.random() < 0.5 ? "right" : "left",
+        state: "idle",      // "idle","run","jump","attack","hit","death","dead"
+        grounded: true,
+        animFrame: 0,
+        animTime: 0,
+        attackCooldown: 0,
+        hasHitThisAttack: false,
+        hitCount: 0,
+        hitStunTimer: 0,
+        lastHitAttackId: -1,
+      });
+    }
+  }
+
+  // --- BOSS ---
+
+  let boss = null;
+
+  function spawnBoss() {
+    const bossAreaStartCol = WORLD_COLS - BOSS_AREA_COLS;
+    const bossX = bossAreaStartCol * TILE_SIZE + TILE_SIZE * 4;
+
+    const groundY = getGroundYAtX(bossX);
+    const y = groundY - BOSS_HEIGHT + FOOT_OFFSET;
+
+    boss = {
+      x: bossX,
+      y: y,
+      vx: 0,
+      vy: 0,
+      dir: "left",
+      state: "idle", // "idle","walk","attack_fireball","attack_kick","death","dead"
+      grounded: true,
+      animFrame: 0,
+      animTime: 0,
+      attackCooldown: 0,
+      hasHitThisAttack: false,
+      hitCount: 0,
+      currentAttackType: "fireball",
+      lastHitAttackId: -1,
+    };
+  }
+
+  // --- PLAYER ---
+
+  const player = {
+    x: 4 * TILE_SIZE,
+    y: 0,
+    width: 0,
+    height: 0,
+    vx: 0,
+    vy: 0,
+    speed: 150,
+    gravity: 2000,
+    jumpStrength: -750,
+    grounded: false,
+    direction: "right",
+    state: "idle", // "idle","run","jump","jab","fkick","hit","death","dead"
+    frame: 0,
+    frameTime: 0,
+    frameInterval: 1000 / 8,
+    stunTimer: 0,
+    hitCount: 0,
+    currentAttackId: 0,
+  };
+
+  let nextAttackId = 1;
+  let cameraX = 0;
+
+  const keys = {};
+  window.addEventListener("keydown", (e) => { keys[e.code] = true; });
+  window.addEventListener("keyup",   (e) => { keys[e.code] = false; });
+
+  let jumpKeyWasDown     = false;
+  let attackKeyWasDown   = false;
+  let debugHitKeyWasDown = false;
+
+  // --- PLAYER HIT & DEATH ---
+
+  function startDeath() {
+    player.state = "death";
+    player.frame = 0;
+    player.frameTime = 0;
+    player.frameInterval = 1000 / 10;
+    player.stunTimer = 0;
+    player.vx = 0;
+  }
+
+  function applyPlayerDamage(hitAmount) {
+    if (player.state === "death" || player.state === "dead") return;
+
+    player.hitCount += hitAmount;
+
+    if (player.hitCount >= MAX_HITS_BEFORE_DEATH) {
+      startDeath();
+      return;
+    }
+
+    player.state = "hit";
+    player.frame = 0;
+    player.frameTime = 0;
+    player.frameInterval = STUN_DURATION / HIT_FRAMES;
+    player.stunTimer = STUN_DURATION;
+
+    if (player.vy > -200) {
+      player.vy = -200;
+    }
+  }
+
+  function triggerPlayerHit() {
+    applyPlayerDamage(1);
+  }
+
+  // --- ENEMY → PLAYER HITBOX ---
+
+  function enemyHitsPlayer(enemy) {
+    const enemyW = ENEMY_WIDTH  || TILE_SIZE;
+    const enemyH = ENEMY_HEIGHT || TILE_SIZE;
+
+    const hitboxWidth  = enemyW * 0.6;
+    const hitboxHeight = enemyH * 0.7;
+    const hitboxY      = enemy.y + enemyH * 0.2;
+
+    let hitboxX;
+    if (enemy.dir === "right") {
+      hitboxX = enemy.x + enemyW - hitboxWidth;
+    } else {
+      hitboxX = enemy.x;
+    }
+
+    const px = player.x;
+    const py = player.y;
+    const pw = player.width;
+    const ph = player.height;
+
+    const overlap =
+      px < hitboxX + hitboxWidth &&
+      px + pw > hitboxX &&
+      py < hitboxY + hitboxHeight &&
+      py + ph > hitboxY;
+
+    return overlap;
+  }
+
+  // --- BOSS → PLAYER HITBOX ---
+
+  function bossHitsPlayer() {
+    if (!boss || boss.state === "dead" || boss.state === "death") return false;
+
+    const bossW = BOSS_WIDTH;
+    const bossH = BOSS_HEIGHT;
+
+    const hitboxWidth  = bossW * 0.7;
+    const hitboxHeight = bossH * 0.8;
+    const hitboxY      = boss.y + bossH * 0.1;
+
+    let hitboxX;
+    if (boss.dir === "right") {
+      hitboxX = boss.x + bossW - hitboxWidth;
+    } else {
+      hitboxX = boss.x;
+    }
+
+    const px = player.x;
+    const py = player.y;
+    const pw = player.width;
+    const ph = player.height;
+
+    const overlap =
+      px < hitboxX + hitboxWidth &&
+      px + pw > hitboxX &&
+      py < hitboxY + hitboxHeight &&
+      py + ph > hitboxY;
+
+    return overlap;
+  }
+
+  // --- PLAYER → ENEMY DAMAGE ---
+
+  function damageEnemy(enemy) {
+    // Ölürken tekrar hasar almasın
+    if (enemy.state === "dead" || enemy.state === "death") return;
+
+    enemy.hitCount = (enemy.hitCount || 0) + 1;
+
+    // 3. hit → ölüm animasyonu
+    if (enemy.hitCount >= ENEMY_MAX_HITS) {
+      enemy.state        = "death";
+      enemy.vx           = 0;
+      enemy.vy           = 0;
+      enemy.animFrame    = 0;
+      enemy.animTime     = 0;
+      enemy.hitStunTimer = 0;
+      return;
+    }
+
+    // Normal taking-hit animasyonu
+    enemy.state = "hit";
+    enemy.vx = 0;
+    enemy.animFrame = 0;
+    enemy.animTime  = 0;
+    enemy.hitStunTimer = ENEMY_HIT_STUN;
+
+    console.log("Enemy entered HIT state");
+  }
+
+  function damageBoss() {
+    if (!boss || boss.state === "dead" || boss.state === "death") return;
+
+    boss.hitCount = (boss.hitCount || 0) + 1;
+
+    if (boss.hitCount >= BOSS_MAX_HITS) {
+      boss.state = "death";
+      boss.vx = 0;
+      boss.vy = 0;
+      boss.animFrame = 0;
+      boss.animTime = 0;
+      boss.attackCooldown = 0;
+    }
+  }
+
+  function playerAttackHitCheck() {
+    if (player.state !== "jab" && player.state !== "fkick") return;
+
+    const hitW = player.width * 0.6;
+    const hitH = player.height * 0.7;
+    const hitY = player.y + player.height * 0.2;
+
+    let hitX;
+    if (player.direction === "right") {
+      hitX = player.x + player.width - hitW;
+    } else {
+      hitX = player.x;
+    }
+
+    const enemyW = ENEMY_WIDTH  || TILE_SIZE;
+    const enemyH = ENEMY_HEIGHT || TILE_SIZE;
+
+    // Normal moblara hasar
+    for (const enemy of enemies) {
+      if (enemy.state === "dead" || enemy.state === "death") continue;
+
+      const ex = enemy.x;
+      const ey = enemy.y;
+
+      const overlap =
+        ex < hitX + hitW &&
+        ex + enemyW > hitX &&
+        ey < hitY + hitH &&
+        ey + enemyH > hitY;
+
+      if (!overlap) continue;
+
+      if (enemy.lastHitAttackId === player.currentAttackId) continue;
+      enemy.lastHitAttackId = player.currentAttackId;
+
+      damageEnemy(enemy);
+    }
+
+    // Boss'a hasar
+    if (boss && boss.state !== "dead" && boss.state !== "death") {
+      const bx = boss.x;
+      const by = boss.y;
+      const bw = BOSS_WIDTH;
+      const bh = BOSS_HEIGHT;
+
+      const overlapBoss =
+        bx < hitX + hitW &&
+        bx + bw > hitX &&
+        by < hitY + hitH &&
+        by + bh > hitY;
+
+      if (overlapBoss && boss.lastHitAttackId !== player.currentAttackId) {
+        boss.lastHitAttackId = player.currentAttackId;
+        damageBoss();
+      }
+    }
+  }
+
+  // --- ENEMY AI / PHYSICS ---
+
+  function updateEnemies(dt) {
+    const enemyW = ENEMY_WIDTH  || TILE_SIZE;
+    const enemyH = ENEMY_HEIGHT || TILE_SIZE;
+    const dtMs   = dt * 1000;
+
+    for (const enemy of enemies) {
+      if (enemy.state === "dead") continue;
+
+      // Ölüm animasyonu sırasında sadece düşme + anim
+      if (enemy.state === "death") {
+        enemy.vy += ENEMY_GRAVITY * dt;
+        let newY = enemy.y + enemy.vy * dt;
+
+        const footY  = newY + enemyH;
+        const leftX  = enemy.x + 4;
+        const rightX = enemy.x + enemyW - 4;
+
+        if (enemy.vy > 0 && (isSolidAt(leftX, footY) || isSolidAt(rightX, footY))) {
+          const row     = Math.floor(footY / TILE_SIZE);
+          const tileTop = row * TILE_SIZE;
+          newY          = tileTop - enemyH + FOOT_OFFSET;
+          enemy.vy      = 0;
+        }
+
+        enemy.y = newY;
+
+        enemy.animTime += dtMs;
+        if (enemy.animTime > ENEMY_DEATH_ANIM_INTERVAL) {
+          enemy.animTime = 0;
+          if (enemy.animFrame < ENEMY_DEATH_FRAMES - 1) {
+            enemy.animFrame++;
+          } else {
+            enemy.state = "dead"; // 7. frame sonrası tamamen yok oluyor
+          }
+        }
+
+        continue;
+      }
+
+      const enemyCenterX  = enemy.x + enemyW / 2;
+      const enemyFeetY    = enemy.y + enemyH;
+      const playerCenterX = player.x + player.width / 2;
+      const playerFeetY   = player.y + player.height;
+
+      const dx    = playerCenterX - enemyCenterX;
+      const absDx = Math.abs(dx);
+      const inRange = absDx < ENEMY_RANGE;
+
+      enemy.attackCooldown = Math.max(0, enemy.attackCooldown - dtMs);
+
+      if (enemy.state === "hit") {
+        enemy.vx = 0;
+      } else if (enemy.state !== "attack") {
+        if (inRange) {
+          const dirSign = dx > 0 ? 1 : -1;
+          enemy.dir = dirSign > 0 ? "right" : "left";
+
+          const stopDistance = ENEMY_ATTACK_RANGE * 0.8;
+          if (absDx > stopDistance) {
+            enemy.vx = dirSign * ENEMY_SPEED;
+          } else {
+            enemy.vx = 0;
+          }
+
+          if (enemy.grounded && enemy.state !== "jump") {
+            enemy.state = Math.abs(enemy.vx) > 0 ? "run" : "idle";
+          }
+        } else {
+          enemy.vx = 0;
+          if (enemy.grounded && enemy.state !== "jump") {
+            enemy.state = "idle";
+          }
+        }
+
+        // gap / duvar / player yüksekliği için zıplama
+        if (enemy.grounded && enemy.state !== "jump") {
+          const dirSign = enemy.dir === "right" ? 1 : -1;
+          const frontX  = enemy.x + (dirSign > 0 ? enemyW : 0) + dirSign * 4;
+
+          const tileBelowCenter = isSolidAt(enemyCenterX, enemyFeetY + 1);
+          const tileBelowFront  = isSolidAt(frontX,      enemyFeetY + 1);
+
+          const wallCheckY      = enemyFeetY - enemyH * 0.5;
+          const wallAhead       = isSolidAt(frontX, wallCheckY);
+
+          const playerHigher = playerFeetY < enemyFeetY - TILE_SIZE / 2;
+          const playerHorizontalClose = absDx < TILE_SIZE * 3;
+          const playerVerticalClose   = Math.abs(playerFeetY - enemyFeetY) < TILE_SIZE * 3;
+
+          const shouldJumpGap   = tileBelowCenter && !tileBelowFront;
+          const shouldJumpStep  = wallAhead;
+          const shouldJumpToPlayer = playerHigher && playerHorizontalClose && playerVerticalClose;
+
+          if (shouldJumpGap || shouldJumpStep || shouldJumpToPlayer) {
+            enemy.state    = "jump";
+            enemy.vy       = ENEMY_JUMP_STRENGTH;
+            enemy.grounded = false;
+            enemy.animFrame = 0;
+            enemy.animTime  = 0;
+          }
+        }
+
+        const closeEnoughHoriz = absDx <= ENEMY_ATTACK_RANGE;
+        const closeEnoughVert  = Math.abs(playerFeetY - enemyFeetY) < TILE_SIZE * 0.6;
+
+        if (
+          enemy.grounded &&
+          inRange &&
+          closeEnoughHoriz &&
+          closeEnoughVert &&
+          enemy.attackCooldown === 0
+        ) {
+          enemy.state = "attack";
+          enemy.vx = 0;
+          enemy.animFrame = 0;
+          enemy.animTime  = 0;
+          enemy.attackCooldown   = ENEMY_ATTACK_COOLDOWN;
+          enemy.hasHitThisAttack = false;
+        }
+      } else {
+        enemy.vx = 0;
+      }
+
+      enemy.x += enemy.vx * dt;
+      if (enemy.x < 0) enemy.x = 0;
+      const maxX = WORLD_WIDTH_PX - BOSS_AREA_WIDTH - enemyW;
+      if (enemy.x > maxX) enemy.x = maxX;
+
+      enemy.vy += ENEMY_GRAVITY * dt;
+      let newY = enemy.y + enemy.vy * dt;
+      enemy.grounded = false;
+
+      if (enemy.vy > 0) {
+        const footY  = newY + enemyH;
+        const leftX  = enemy.x + 4;
+        const rightX = enemy.x + enemyW - 4;
+
+        if (isSolidAt(leftX, footY) || isSolidAt(rightX, footY)) {
+          const row     = Math.floor(footY / TILE_SIZE);
+          const tileTop = row * TILE_SIZE;
+          newY          = tileTop - enemyH + FOOT_OFFSET;
+          enemy.vy      = 0;
+          enemy.grounded = true;
+
+          if (enemy.state === "jump") {
+            enemy.state = Math.abs(enemy.vx) > 0 ? "run" : "idle";
+            enemy.animFrame = 0;
+            enemy.animTime  = 0;
+          }
+        }
+      } else if (enemy.vy < 0) {
+        const headY  = newY;
+        const leftX  = enemy.x + 4;
+        const rightX = enemy.x + enemyW - 4;
+
+        if (isSolidAt(leftX, headY) || isSolidAt(rightX, headY)) {
+          const row        = Math.floor(headY / TILE_SIZE);
+          const tileBottom = (row + 1) * TILE_SIZE;
+          newY             = tileBottom;
+          enemy.vy         = 0;
+        }
+      }
+
+      enemy.y = newY;
+
+      if (enemy.state === "attack") {
+        enemy.animTime += dtMs;
+        if (enemy.animTime > ENEMY_ATTACK_ANIM_INTERVAL) {
+          enemy.animTime = 0;
+
+          if (
+            !enemy.hasHitThisAttack &&
+            enemy.animFrame >= ENEMY_ATTACK_HIT_START &&
+            enemy.animFrame <= ENEMY_ATTACK_HIT_END &&
+            enemyHitsPlayer(enemy)
+          ) {
+            enemy.hasHitThisAttack = true;
+            triggerPlayerHit();
+          }
+
+          if (enemy.animFrame < ENEMY_ATTACK_FRAMES - 1) {
+            enemy.animFrame++;
+          } else {
+            enemy.hasHitThisAttack = false;
+            enemy.animFrame = 0;
+
+            if (!enemy.grounded) {
+              enemy.state = "jump";
+            } else if (inRange) {
+              enemy.state = "idle";
+            } else {
+              enemy.state = Math.abs(enemy.vx) > 0 ? "run" : "idle";
+            }
+          }
+        }
+      } else if (enemy.state === "hit") {
+        enemy.animTime += dtMs;
+        if (enemy.animTime > ENEMY_HIT_ANIM_INTERVAL) {
+          enemy.animTime = 0;
+          if (enemy.animFrame < ENEMY_HIT_FRAMES - 1) {
+            enemy.animFrame++;
+          }
+        }
+
+        enemy.hitStunTimer -= dtMs;
+        if (enemy.hitStunTimer <= 0) {
+          enemy.state = enemy.grounded ? "idle" : "jump";
+          enemy.animFrame = 0;
+          enemy.animTime  = 0;
+        }
+      } else {
+        enemy.animTime += dtMs;
+        if (enemy.animTime > ENEMY_ANIM_INTERVAL) {
+          enemy.animTime = 0;
+
+          let maxFrames = ENEMY_IDLE_FRAMES;
+          if (enemy.state === "run") {
+            maxFrames = ENEMY_RUN_FRAMES;
+          } else if (enemy.state === "jump") {
+            maxFrames = ENEMY_JUMP_FRAMES;
+          }
+          enemy.animFrame = (enemy.animFrame + 1) % maxFrames;
+        }
+      }
+    }
+  }
+
+  // --- BOSS AI / PHYSICS ---
+
+  function updateBoss(dt) {
+    if (!boss || boss.state === "dead") return;
+
+    const dtMs = dt * 1000;
+    const bossW = BOSS_WIDTH;
+    const bossH = BOSS_HEIGHT;
+
+    if (boss.state === "death") {
+      // Sadece ölüm animasyonu
+      boss.animTime += dtMs;
+      if (boss.animTime > BOSS_DEATH_ANIM_INTERVAL) {
+        boss.animTime = 0;
+        if (boss.animFrame < BOSS_DEATH_FRAMES - 1) {
+          boss.animFrame++;
+        } else {
+          boss.state = "dead";
+        }
+      }
+      return;
+    }
+
+    const bossCenterX  = boss.x + bossW / 2;
+    const bossFeetY    = boss.y + bossH;
+    const playerCenterX = player.x + player.width / 2;
+    const playerFeetY   = player.y + player.height;
+
+    const dx    = playerCenterX - bossCenterX;
+    const absDx = Math.abs(dx);
+
+    const inRange = absDx < BOSS_RANGE;
+
+    boss.attackCooldown = Math.max(0, boss.attackCooldown - dtMs);
+
+    if (boss.state === "attack_fireball" || boss.state === "attack_kick") {
+      boss.animTime += dtMs;
+      if (boss.animTime > BOSS_ATTACK_ANIM_INTERVAL) {
+        boss.animTime = 0;
+
+        const isFireball = boss.state === "attack_fireball";
+        const maxFrames  = isFireball ? BOSS_FIREBALL_FRAMES : BOSS_KICK_FRAMES;
+        const hitStart   = isFireball ? BOSS_FIREBALL_HIT_START : BOSS_KICK_HIT_START;
+        const hitEnd     = isFireball ? BOSS_FIREBALL_HIT_END   : BOSS_KICK_HIT_END;
+
+        if (
+          !boss.hasHitThisAttack &&
+          boss.animFrame >= hitStart &&
+          boss.animFrame <= hitEnd &&
+          bossHitsPlayer()
+        ) {
+          boss.hasHitThisAttack = true;
+          applyPlayerDamage(2); // her vuruş 2 hit
+        }
+
+        if (boss.animFrame < maxFrames - 1) {
+          boss.animFrame++;
+        } else {
+          boss.hasHitThisAttack = false;
+          boss.attackCooldown   = BOSS_ATTACK_COOLDOWN;
+          boss.state = "idle";
+          boss.animFrame = 0;
+          boss.animTime  = 0;
+
+          // Pattern: fireball → kick → fireball → ...
+          boss.currentAttackType =
+            boss.currentAttackType === "fireball" ? "kick" : "fireball";
+        }
+      }
+    } else {
+      // Hareket + saldırı başlatma
+      if (inRange) {
+        const dirSign = dx > 0 ? 1 : -1;
+        boss.dir = dirSign > 0 ? "right" : "left";
+
+        const stopDistance = BOSS_ATTACK_RANGE * 0.8;
+        if (absDx > stopDistance) {
+          boss.vx = dirSign * BOSS_SPEED;
+        } else {
+          boss.vx = 0;
+        }
+      } else {
+        boss.vx = 0;
+      }
+
+      boss.state = Math.abs(boss.vx) > 0 ? "walk" : "idle";
+
+      const closeEnoughHoriz = absDx <= BOSS_ATTACK_RANGE;
+      const closeEnoughVert  = Math.abs(playerFeetY - bossFeetY) < TILE_SIZE * 0.8;
+
+      if (
+        inRange &&
+        closeEnoughHoriz &&
+        closeEnoughVert &&
+        boss.attackCooldown === 0
+      ) {
+        boss.state =
+          boss.currentAttackType === "fireball"
+            ? "attack_fireball"
+            : "attack_kick";
+        boss.vx = 0;
+        boss.animFrame = 0;
+        boss.animTime  = 0;
+        boss.hasHitThisAttack = false;
+      }
+    }
+
+    // Hareket
+    boss.x += boss.vx * dt;
+
+    const bossMinX = WORLD_WIDTH_PX - BOSS_AREA_WIDTH;
+    const bossMaxX = WORLD_WIDTH_PX - bossW;
+    if (boss.x < bossMinX) boss.x = bossMinX;
+    if (boss.x > bossMaxX) boss.x = bossMaxX;
+
+    // Yer çekimi + zemin
+    boss.vy += ENEMY_GRAVITY * dt;
+    let newY = boss.y + boss.vy * dt;
+    boss.grounded = false;
+
+    if (boss.vy > 0) {
+      const footY  = newY + bossH;
+      const leftX  = boss.x + 4;
+      const rightX = boss.x + bossW - 4;
+
+      if (isSolidAt(leftX, footY) || isSolidAt(rightX, footY)) {
+        const row     = Math.floor(footY / TILE_SIZE);
+        const tileTop = row * TILE_SIZE;
+        newY          = tileTop - bossH + FOOT_OFFSET;
+        boss.vy       = 0;
+        boss.grounded = true;
+      }
+    } else if (boss.vy < 0) {
+      const headY  = newY;
+      const leftX  = boss.x + 4;
+      const rightX = boss.x + bossW - 4;
+
+      if (isSolidAt(leftX, headY) || isSolidAt(rightX, headY)) {
+        const row        = Math.floor(headY / TILE_SIZE);
+        const tileBottom = (row + 1) * TILE_SIZE;
+        newY             = tileBottom;
+        boss.vy          = 0;
+      }
+    }
+
+    boss.y = newY;
+
+    // Idle / walk animasyonu
+    if (boss.state === "idle" || boss.state === "walk") {
+      boss.animTime += dtMs;
+      if (boss.animTime > BOSS_ANIM_INTERVAL) {
+        boss.animTime = 0;
+        if (boss.state === "walk") {
+          boss.animFrame = (boss.animFrame + 1) % 8;
+        } else {
+          boss.animFrame = 0;
+        }
+      }
+    }
+  }
+
+  // --- TILE ÇİZİMİ ---
+
+  function drawTile(id, worldX, worldY) {
+    if (id === -1) return;
+
+    const screenX = worldX - cameraX;
+    const screenY = worldY;
+
+    if (screenX + TILE_SIZE < 0 || screenX > canvas.width) return;
+
+    const col = Math.floor(worldX / TILE_SIZE);
+    const row = Math.floor(worldY / TILE_SIZE);
+
+    const variant = (col + row * 2) % 3;
+
+    let dirtDark       = "#4b2a1a";
+    let dirtMain       = "#6c3f25";
+    let dirtLight      = "#8a5a33";
+    let grassBase      = "#3fbf3f";
+    let grassDark      = "#2f8f2f";
+    let grassHighlight = "#7dff7d";
+
+    if (variant === 1) {
+      dirtDark       = "#42251a";
+      dirtMain       = "#63402b";
+      dirtLight      = "#8b6540";
+      grassBase      = "#45c953";
+      grassDark      = "#2f9240";
+      grassHighlight = "#90ff90";
+    } else if (variant === 2) {
+      dirtDark       = "#3a2317";
+      dirtMain       = "#5a3522";
+      dirtLight      = "#7a5233";
+      grassBase      = "#38b547";
+      grassDark      = "#2c7f35";
+      grassHighlight = "#70ff80";
+    }
+
+    if (id === 0) {
+      ctx.fillStyle = dirtMain;
+      ctx.fillRect(
+        screenX,
+        screenY + TILE_SIZE * 0.25,
+        TILE_SIZE,
+        TILE_SIZE * 0.75
+      );
+
+      ctx.fillStyle = dirtLight;
+      ctx.fillRect(
+        screenX,
+        screenY + TILE_SIZE * 0.25,
+        TILE_SIZE,
+        TILE_SIZE * 0.20
+      );
+
+      ctx.fillStyle = dirtDark;
+      ctx.fillRect(
+        screenX,
+        screenY + TILE_SIZE * 0.88,
+        TILE_SIZE,
+        TILE_SIZE * 0.12
+      );
+
+      ctx.fillStyle = grassBase;
+      ctx.fillRect(
+        screenX,
+        screenY,
+        TILE_SIZE,
+        TILE_SIZE * 0.28
+      );
+
+      ctx.fillStyle = grassDark;
+      ctx.fillRect(
+        screenX,
+        screenY,
+        TILE_SIZE,
+        3
+      );
+
+      ctx.fillStyle = grassHighlight;
+      const seed = (col * 13 + row * 7) & 0xff;
+
+      if (seed % 3 === 0) {
+        ctx.fillRect(screenX + 4, screenY + 2, 2, TILE_SIZE * 0.20);
+      }
+      if (seed % 5 === 0) {
+        ctx.fillRect(screenX + 10, screenY + 2, 2, TILE_SIZE * 0.18);
+      }
+
+      if (seed % 4 === 0) {
+        ctx.fillStyle = "#c58a5a";
+        ctx.fillRect(
+          screenX + TILE_SIZE * 0.18,
+          screenY + TILE_SIZE * 0.60,
+          3,
+          3
+        );
+      }
+      if (seed % 7 === 0) {
+        ctx.fillStyle = "#b0794f";
+        ctx.fillRect(
+          screenX + TILE_SIZE * 0.65,
+          screenY + TILE_SIZE * 0.78,
+          2,
+          2
+        );
+      }
+    }
+  }
+
+  // --- ENEMY ÇİZİMİ ---
+
+  function drawEnemies() {
+    for (const enemy of enemies) {
+      if (enemy.state === "dead") continue;
+
+      let frames;
+
+      if (enemy.state === "run") {
+        frames = enemy.dir === "right" ? enemyRunEastFrames : enemyRunWestFrames;
+      } else if (enemy.state === "jump") {
+        const hasJump =
+          (enemy.dir === "right" ? enemyJumpEastFrames.length : enemyJumpWestFrames.length) > 0;
+        if (hasJump) {
+          frames = enemy.dir === "right" ? enemyJumpEastFrames : enemyJumpWestFrames;
+        } else {
+          frames = enemy.dir === "right" ? enemyRunEastFrames : enemyRunWestFrames;
+        }
+      } else if (enemy.state === "attack") {
+        const hasAttack =
+          (enemy.dir === "right" ? enemyAttackEastFrames.length : enemyAttackWestFrames.length) > 0;
+        if (hasAttack) {
+          frames = enemy.dir === "right" ? enemyAttackEastFrames : enemyAttackWestFrames;
+        } else {
+          frames = enemy.dir === "right" ? enemyIdleEastFrames : enemyIdleWestFrames;
+        }
+      } else if (enemy.state === "hit") {
+        frames = enemy.dir === "right" ? enemyHitEastFrames : enemyHitWestFrames;
+      } else if (enemy.state === "death") {
+        frames = enemy.dir === "right" ? enemyDeathEastFrames : enemyDeathWestFrames;
+      } else {
+        frames = enemy.dir === "right" ? enemyIdleEastFrames : enemyIdleWestFrames;
+      }
+
+      if (!frames || frames.length === 0) continue;
+
+      const frameIndex = Math.min(enemy.animFrame, frames.length - 1);
+      const img = frames[frameIndex];
+
+      if (!img || !img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
+        continue;
+      }
+
+      const screenX = enemy.x - cameraX;
+      const screenY = enemy.y;
+
+      if (screenX + img.width < 0 || screenX > canvas.width) continue;
+
+      ctx.drawImage(img, screenX, screenY);
+    }
+  }
+
+  // --- BOSS ÇİZİMİ ---
+
+  function drawBoss() {
+    if (!boss || boss.state === "dead") return;
+
+    let frames;
+
+    if (boss.state === "walk") {
+      frames = boss.dir === "right" ? bossWalkEastFrames : bossWalkWestFrames;
+    } else if (boss.state === "attack_fireball") {
+      frames = boss.dir === "right" ? bossFireballEastFrames : bossFireballWestFrames;
+    } else if (boss.state === "attack_kick") {
+      frames = boss.dir === "right" ? bossKickEastFrames : bossKickWestFrames;
+    } else if (boss.state === "death") {
+      frames = bossDeathFrames;
+    } else {
+      frames = boss.dir === "right" ? [bossIdleEastImg] : [bossIdleWestImg];
+    }
+
+    if (!frames || frames.length === 0) return;
+
+    const frameIndex = Math.min(boss.animFrame, frames.length - 1);
+    const img = frames[frameIndex];
+
+    if (!img || !img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) return;
+
+    const screenX = boss.x - cameraX;
+    const screenY = boss.y;
+
+    if (screenX + img.width < 0 || screenX > canvas.width) return;
+
+    ctx.drawImage(img, screenX, screenY);
+  }
+
+  // --- UPDATE ---
+
+  function update(deltaTime) {
+    if (player.state === "dead") {
+      return;
+    }
+
+    const dt = deltaTime / 1000;
+    const worldWidthPx = WORLD_WIDTH_PX;
+
+    const left  = keys["ArrowLeft"];
+    const right = keys["ArrowRight"];
+
+    const debugHitKey = keys["KeyK"];
+    if (debugHitKey && !debugHitKeyWasDown) {
+      triggerPlayerHit();
+    }
+    debugHitKeyWasDown = debugHitKey;
+
+    const attackKey = keys["KeyZ"];
+    if (
+      attackKey && !attackKeyWasDown &&
+      player.state !== "jab" &&
+      player.state !== "fkick" &&
+      player.state !== "hit" &&
+      player.state !== "death"
+    ) {
+      if (player.grounded) {
+        player.state = "jab";
+        player.frame = 0;
+        player.frameTime = 0;
+        player.frameInterval = 1000 / 15;
+        player.currentAttackId = nextAttackId++;
+      } else {
+        player.state = "fkick";
+        player.frame = 0;
+        player.frameTime = 0;
+        player.frameInterval = 1000 / 18;
+        if (player.vy < FKICK_MIN_FALL_VY) {
+          player.vy = FKICK_MIN_FALL_VY;
+        }
+        player.currentAttackId = nextAttackId++;
+      }
+    }
+    attackKeyWasDown = attackKey;
+
+    let moving = false;
+    let vx = 0;
+
+    if (player.state === "fkick") {
+      const dirSign = (player.direction === "right") ? 1 : -1;
+      vx = dirSign * FKICK_SPEED;
+    } else if (
+      player.state !== "jab" &&
+      player.state !== "hit" &&
+      player.state !== "death"
+    ) {
+      if (right) {
+        vx += player.speed;
+        player.direction = "right";
+        moving = true;
+      }
+      if (left) {
+        vx -= player.speed;
+        player.direction = "left";
+        moving = true;
+      }
+    }
+
+    player.x += vx * dt;
+
+    if (player.x < 0) player.x = 0;
+    if (player.x > worldWidthPx - player.width) {
+      player.x = worldWidthPx - player.width;
+    }
+
+    const jumpKey = keys["Space"] || keys["ArrowUp"];
+    if (
+      player.state !== "jab" &&
+      player.state !== "fkick" &&
+      player.state !== "hit" &&
+      player.state !== "death"
+    ) {
+      if (jumpKey && !jumpKeyWasDown && player.grounded) {
+        player.vy = player.jumpStrength;
+        player.grounded = false;
+      }
+    }
+    jumpKeyWasDown = jumpKey;
+
+    player.vy += player.gravity * dt;
+    let newY = player.y + player.vy * dt;
+
+    player.grounded = false;
+
+    if (player.vy > 0) {
+      const footY  = newY + player.height;
+      const leftX  = player.x + 5;
+      const rightX = player.x + player.width - 5;
+
+      if (isSolidAt(leftX, footY) || isSolidAt(rightX, footY)) {
+        const row     = Math.floor(footY / TILE_SIZE);
+        const tileTop = row * TILE_SIZE;
+        newY          = tileTop - player.height + FOOT_OFFSET;
+        player.vy     = 0;
+        player.grounded = true;
+      }
+    } else if (player.vy < 0) {
+      const headY  = newY;
+      const leftX  = player.x + 5;
+      const rightX = player.x + player.width - 5;
+
+      if (isSolidAt(leftX, headY) || isSolidAt(rightX, headY)) {
+        const row        = Math.floor(headY / TILE_SIZE);
+        const tileBottom = (row + 1) * TILE_SIZE;
+        newY  = tileBottom;
+        player.vy = 0;
+      }
+    }
+
+    player.y = newY;
+
+    if (player.state === "hit") {
+      player.stunTimer -= deltaTime;
+      if (player.stunTimer <= 0) {
+        const movingNow = left || right;
+        let newState;
+        if (!player.grounded) {
+          newState = "jump";
+        } else if (movingNow) {
+          newState = "run";
+        } else {
+          newState = "idle";
+        }
+
+        player.state = newState;
+        player.frame = 0;
+        player.frameTime = 0;
+
+        if (player.state === "run") {
+          player.frameInterval = 1000 / 14;
+        } else if (player.state === "jump") {
+          player.frameInterval = 1000 / 10;
+        } else {
+          player.frameInterval = 1000 / 8;
+        }
+      }
+    }
+
+    if (
+      player.state !== "jab" &&
+      player.state !== "fkick" &&
+      player.state !== "hit" &&
+      player.state !== "death"
+    ) {
+      let newState;
+      if (!player.grounded) {
+        newState = "jump";
+      } else if (moving) {
+        newState = "run";
+      } else {
+        newState = "idle";
+      }
+
+      if (newState !== player.state) {
+        player.state = newState;
+        player.frame = 0;
+        player.frameTime = 0;
+
+        if (player.state === "run") {
+          player.frameInterval = 1000 / 14;
+        } else if (player.state === "jump") {
+          player.frameInterval = 1000 / 10;
+        } else {
+          player.frameInterval = 1000 / 8;
+        }
+      }
+    }
+
+    player.frameTime += deltaTime;
+    if (player.frameTime > player.frameInterval) {
+      player.frameTime = 0;
+
+      if (player.state === "run") {
+        player.frame = (player.frame + 1) % RUN_FRAMES;
+      } else if (player.state === "jump") {
+        if (player.frame < JUMP_FRAMES - 1) player.frame++;
+      } else if (player.state === "jab") {
+        if (player.frame < JAB_FRAMES - 1) {
+          player.frame++;
+        } else {
+          const movingNow = left || right;
+          let newState;
+          if (!player.grounded) {
+            newState = "jump";
+          } else if (movingNow) {
+            newState = "run";
+          } else {
+            newState = "idle";
+          }
+          player.state = newState;
+          player.frame = 0;
+
+          if (player.state === "run") {
+            player.frameInterval = 1000 / 14;
+          } else if (player.state === "jump") {
+            player.frameInterval = 1000 / 10;
+          } else {
+            player.frameInterval = 1000 / 8;
+          }
+        }
+      } else if (player.state === "fkick") {
+        if (player.frame < FKICK_FRAMES - 1) {
+          player.frame++;
+        } else {
+          const movingNow = left || right;
+          let newState;
+          if (!player.grounded) {
+            newState = "jump";
+          } else if (movingNow) {
+            newState = "run";
+          } else {
+            newState = "idle";
+          }
+          player.state = newState;
+          player.frame = 0;
+
+          if (player.state === "run") {
+            player.frameInterval = 1000 / 14;
+          } else if (player.state === "jump") {
+            player.frameInterval = 1000 / 10;
+          } else {
+            player.frameInterval = 1000 / 8;
+          }
+        }
+      } else if (player.state === "hit") {
+        if (player.frame < HIT_FRAMES - 1) {
+          player.frame++;
+        }
+      } else if (player.state === "death") {
+        if (player.frame < DEATH_FRAMES - 1) {
+          player.frame++;
+        } else {
+          player.state = "dead";
+          player.frame = 0;
+        }
+      } else {
+        player.frame = (player.frame + 1) % IDLE_FRAMES;
+      }
+    }
+
+    // Player saldırı hit window (Z yerde + Z havada)
+    if (player.state === "jab") {
+      if (player.frame >= JAB_HIT_START && player.frame <= JAB_HIT_END) {
+        playerAttackHitCheck();
+      }
+    } else if (player.state === "fkick") {
+      if (player.frame >= FKICK_HIT_START && player.frame <= FKICK_HIT_END) {
+        playerAttackHitCheck();
+      }
+    }
+
+    cameraX = player.x + player.width / 2 - canvas.width / 2;
+    if (cameraX < 0) cameraX = 0;
+    if (cameraX > worldWidthPx - canvas.width) {
+      cameraX = worldWidthPx - canvas.width;
+    }
+
+    updateEnemies(dt);
+    updateBoss(dt);
+  }
+
+  // --- ÇİZİM ---
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (bgImg.complete && bgImg.naturalWidth > 0) {
+      const bgWidth  = bgImg.width;
+      const bgHeight = bgImg.height;
+
+      const scaleY      = canvas.height / bgHeight;
+      const scaledWidth = bgWidth * scaleY;
+
+      const parallax = 0.3;
+      let offsetX = -(cameraX * parallax) % scaledWidth;
+      if (offsetX > 0) offsetX -= scaledWidth;
+
+      for (let x = offsetX; x < canvas.width; x += scaledWidth) {
+        ctx.drawImage(
+          bgImg,
+          0, 0, bgWidth, bgHeight,
+          x, 0, scaledWidth, canvas.height
+        );
+      }
+    } else {
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    for (let row = 0; row < WORLD_ROWS; row++) {
+      for (let col = 0; col < WORLD_COLS; col++) {
+        const id = level[row][col];
+        const worldX = col * TILE_SIZE;
+        const worldY = row * TILE_SIZE;
+        drawTile(id, worldX, worldY);
+      }
+    }
+
+    drawEnemies();
+    drawBoss();
+
+    if (player.width && player.height) {
+      const screenX = player.x - cameraX;
+      const heroY   = player.y;
+
+      if (player.state === "dead") {
+        if (deathFinalImg && deathFinalImg.complete) {
+          ctx.drawImage(deathFinalImg, screenX, heroY + 8);
+        }
+        return;
+      }
+
+      let frames;
+
+      if (player.state === "run") {
+        frames = (player.direction === "right") ? runEastFrames : runWestFrames;
+      } else if (player.state === "jump") {
+        frames = (player.direction === "right") ? jumpEastFrames : jumpWestFrames;
+      } else if (player.state === "jab") {
+        frames = (player.direction === "right") ? jabEastFrames : jabWestFrames;
+      } else if (player.state === "fkick") {
+        frames = (player.direction === "right") ? fkickEastFrames : fkickWestFrames;
+      } else if (player.state === "hit") {
+        frames = (player.direction === "right") ? hitEastFrames : hitWestFrames;
+      } else if (player.state === "death") {
+        frames = (player.direction === "right") ? deathEastFrames : deathWestFrames;
+      } else {
+        frames = (player.direction === "right") ? idleEastFrames : idleWestFrames;
+      }
+
+      const max = frames.length;
+      const idx = max > 0 ? player.frame % max : 0;
+      const img = frames[idx] || frames[0];
+
+      if (img && img.complete) {
+        ctx.drawImage(img, screenX, heroY);
+      }
+    }
+  }
+
+  // --- GAME LOOP ---
+
+  let lastTime = 0;
+
+  function gameLoop(timestamp) {
+    const deltaTime = timestamp - lastTime;
+    lastTime = timestamp || 16;
+
+    update(deltaTime);
+    draw();
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  // --- BAŞLATMA ---
+
+  let baseImagesLoaded = 0;
+  function tryStart() {
+    baseImagesLoaded++;
+    if (baseImagesLoaded === 2) {
+      generateLevel();
+      spawnEnemies();
+      spawnBoss();
+      requestAnimationFrame(gameLoop);
+    }
+  }
+
+  bgImg.onload = tryStart;
+
+  enemyIdleEastFrames[0].onload = () => {
+    ENEMY_WIDTH  = enemyIdleEastFrames[0].width;
+    ENEMY_HEIGHT = enemyIdleEastFrames[0].height;
+  };
+
+  idleEastFrames[0].onload = () => {
+    player.width  = idleEastFrames[0].width;
+    player.height = idleEastFrames[0].height;
+
+    const GROUND_ROW = WORLD_ROWS - 1;
+    const groundTop  = GROUND_ROW * TILE_SIZE;
+
+    player.y = groundTop - player.height + FOOT_OFFSET;
+
+    tryStart();
+  };
+  </script>
+</body>
+</html>
